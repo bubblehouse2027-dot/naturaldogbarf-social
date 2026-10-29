@@ -1,0 +1,62 @@
+name: Publish scheduled posts
+
+on:
+  schedule:
+    - cron: "4,34 * * * *"   # every 30 minutes (UTC); posts go out at their Lisbon time or shortly after
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "due = publish what is due · check = test the connection · dry-run = show only · only = one post now"
+        type: choice
+        options: [due, check, dry-run, only]
+        default: due
+      post:
+        description: "Post number for mode 'only' (e.g. 7)"
+        required: false
+      platform:
+        description: "Optional: instagram or facebook (empty = both)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publisher
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      META_PAGE_TOKEN: ${{ secrets.META_PAGE_TOKEN }}
+      FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      MEDIA_BASE_URL: ${{ vars.MEDIA_BASE_URL }}
+      GRAPH_API_VERSION: ${{ vars.GRAPH_API_VERSION || 'v26.0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r publisher/requirements.txt
+      - name: Run publisher
+        run: |
+          MODE="${{ github.event.inputs.mode || 'due' }}"
+          ARGS=""
+          case "$MODE" in
+            check) ARGS="--check" ;;
+            dry-run) ARGS="--dry-run" ;;
+            only) ARGS="--only ${{ github.event.inputs.post }}" ;;
+          esac
+          if [ -n "${{ github.event.inputs.platform }}" ]; then ARGS="$ARGS --platform ${{ github.event.inputs.platform }}"; fi
+          python publisher/publish.py $ARGS
+      - name: Save publishing log
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain state/)" ]; then
+            git config user.name "naturaldogbarf-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add state/
+            git commit -m "Published posts: update log"
+            git push
+          fi
